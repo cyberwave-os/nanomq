@@ -511,6 +511,24 @@ server_cb(void *arg)
 				nng_ctx_send(work->extra_ctx, work->aio);
 				break;
 			}
+			if (work->code == NOT_AUTHORIZED &&
+			    work->proto == PROTO_MQTT_BROKER &&
+			    work->config->acl_deny_action == ACL_IGNORE) {
+				// Drop before WAIT: no delivery, retained state, bridge,
+				// webhook or rule-engine side effects. Keep the session.
+				free_pub_packet(work->pub_packet);
+				work->pub_packet = NULL;
+				cvector_free(work->pipe_ct->msg_infos);
+				work->pipe_ct->msg_infos = NULL;
+				conn_param_free(work->cparam);
+				nng_msg_free(work->msg);
+				work->msg = NULL;
+				work->code = SUCCESS;
+				init_pipe_content(work->pipe_ct);
+				work->state = RECV;
+				nng_ctx_recv(work->ctx, work->aio);
+				break;
+			}
 			if (work->code != SUCCESS) {
 				//what if extra ctx brings a wrong msg?
 				if (work->proto != PROTO_MQTT_BROKER) {

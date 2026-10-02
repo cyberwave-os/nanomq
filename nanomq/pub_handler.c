@@ -1639,6 +1639,7 @@ handle_pub(nano_work *work, struct pipe_content *pipe_ct, uint8_t proto,
 		struct topic_queue *tq = topic_queue_init(topic, len);
 		if (tq == NULL) {
 			log_error("topic_queue_init failed!");
+			return NOT_AUTHORIZED;
 		} else {
 			int rv = nmq_auth_http_sub_pub(work->cparam, false, tq, &work->config->auth_http);
 			if (rv != 0) {
@@ -1724,14 +1725,8 @@ handle_pub(nano_work *work, struct pipe_content *pipe_ct, uint8_t proto,
 				         "username [%s] topic [%s]",
 				    cid == NULL ? "" : cid,
 				    username == NULL ? "" : username, topic);
-				if (work->config->acl_deny_action ==
-				    ACL_DISCONNECT) {
-					log_warn(
-					    "acl deny, disconnect client");
-					return NORMAL_DISCONNECTION;
-				} else {
-					return BANNED;
-				}
+				// The broker applies deny_action to both local and HTTP ACLs.
+				return NOT_AUTHORIZED;
 			} else {
 				log_debug("acl allow");
 			}
