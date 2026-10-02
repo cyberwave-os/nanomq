@@ -373,7 +373,8 @@ sub_ctx_handle(nano_work *work)
 
 	tn = work->sub_pkt->node;
 #ifdef ACL_SUPP
-	if (work->config->auth_http.enable) {
+	bool local_auth = verify_local_credentials(work->cparam, work->config) == 1;
+	if (work->config->auth_http.enable && !local_auth) {
 		topic_queue *tq = NULL;
 		tn = work->sub_pkt->node;
 		tq = init_topic_queue_with_topic_node(tn);
@@ -418,7 +419,8 @@ sub_ctx_handle(nano_work *work)
 			goto next;
 #ifdef ACL_SUPP
 		/* Add items which not included in dbhash */
-		if (work->config->acl.enable) {
+		if (work->config->acl.enable &&
+		    (!work->config->auth_http.enable || local_auth)) {
 			bool auth_result = auth_acl(
 			    work->config, ACL_SUB, work->cparam, topic_str);
 			if (!auth_result) {

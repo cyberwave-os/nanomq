@@ -1632,7 +1632,10 @@ handle_pub(nano_work *work, struct pipe_content *pipe_ct, uint8_t proto,
 	topic        = work->pub_packet->var_header.publish.topic_name.body;
 	uint32_t len = work->pub_packet->var_header.publish.topic_name.len;
 #ifdef ACL_SUPP
-	if (work->config != NULL && work->config->auth_http.enable) {
+	bool local_auth = work->config != NULL &&
+	    verify_local_credentials(work->cparam, work->config) == 1;
+	if (!is_event && work->config != NULL &&
+	    work->config->auth_http.enable && !local_auth) {
 		struct topic_queue *tq = topic_queue_init(topic, len);
 		if (tq == NULL) {
 			log_error("topic_queue_init failed!");
@@ -1708,7 +1711,8 @@ handle_pub(nano_work *work, struct pipe_content *pipe_ct, uint8_t proto,
 
 #ifdef ACL_SUPP
 	if (!is_event && work->cparam) {
-		if (work->config->acl.enable) {
+		if (work->config->acl.enable &&
+		    (!work->config->auth_http.enable || local_auth)) {
 			bool rv = auth_acl(
 			    work->config, ACL_PUB, work->cparam, topic);
 			if (!rv) {
