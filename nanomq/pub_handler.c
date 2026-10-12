@@ -48,6 +48,10 @@ typedef struct {
 	nng_atomic_u64 *msg_in;
 	nng_atomic_u64 *msg_out;
 	nng_atomic_u64 *msg_drop;
+	// Publish payload bytes received from publishers / delivered to
+	// subscribers (one count per delivery, like msg_out).
+	nng_atomic_u64 *bytes_in;
+	nng_atomic_u64 *bytes_out;
 } msg_statistics;
 
 static msg_statistics g_msg = { .initialed = false };
@@ -58,6 +62,8 @@ msg_statistics_init(msg_statistics *m)
 	nng_atomic_alloc64(&m->msg_in);
 	nng_atomic_alloc64(&m->msg_out);
 	nng_atomic_alloc64(&m->msg_drop);
+	nng_atomic_alloc64(&m->bytes_in);
+	nng_atomic_alloc64(&m->bytes_out);
 	m->initialed = true;
 }
 
@@ -77,6 +83,18 @@ uint64_t
 nanomq_get_message_drop()
 {
 	return g_msg.initialed ? nng_atomic_get64(g_msg.msg_drop) : 0;
+}
+
+uint64_t
+nanomq_get_bytes_in()
+{
+	return g_msg.initialed ? nng_atomic_get64(g_msg.bytes_in) : 0;
+}
+
+uint64_t
+nanomq_get_bytes_out()
+{
+	return g_msg.initialed ? nng_atomic_get64(g_msg.bytes_out) : 0;
 }
 
 #endif
@@ -118,6 +136,10 @@ foreach_client(
 		// TODO
 		// nng_atomic_inc64(ctx->recv_cnt);
 		nng_atomic_inc64(g_msg.msg_out);
+		if (pub_work->pub_packet != NULL) {
+			nng_atomic_add64(g_msg.bytes_out,
+			    pub_work->pub_packet->payload.len);
+		}
 #endif
 		if (pids == 0) {
 			continue;
@@ -1628,6 +1650,13 @@ handle_pub(nano_work *work, struct pipe_content *pipe_ct, uint8_t proto,
 	if (PUBLISH != work->pub_packet->fixed_header.packet_type) {
 		return MALFORMED_PACKET;
 	}
+#ifdef STATISTICS
+	// Internal $SYS events (client online/offline) run through this handler
+	// too; only count payloads published by clients.
+	if (!is_event) {
+		nng_atomic_add64(g_msg.bytes_in, work->pub_packet->payload.len);
+	}
+#endif
 
 	topic        = work->pub_packet->var_header.publish.topic_name.body;
 	uint32_t len = work->pub_packet->var_header.publish.topic_name.len;

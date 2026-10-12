@@ -107,8 +107,11 @@ extern void *broker_start_with_conf(void *nmq_conf);
 extern uint64_t nanomq_get_message_in(void);
 extern uint64_t nanomq_get_message_out(void);
 extern uint64_t nanomq_get_message_drop(void);
+extern uint64_t nanomq_get_bytes_in(void);
+extern uint64_t nanomq_get_bytes_out(void);
 #endif
 extern dbtree *          get_broker_db(void);
+extern dbtree *          get_broker_retain_db(void);
 extern struct hashmap_s *get_hashmap(void);
 extern int               rule_engine_insert_sql(nano_work *work);
 

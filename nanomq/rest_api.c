@@ -56,7 +56,7 @@
 #endif
 
 typedef int (handle_mqtt_msg_cb) (cJSON *, nng_socket *);
-#define METRICS_DATA_SIZE 2048
+#define METRICS_DATA_SIZE 4096
 
 typedef struct {
 	char *key;
@@ -1376,6 +1376,9 @@ typedef struct {
 	uint64_t message_received;
 	uint64_t message_sent;
 	uint64_t message_dropped;
+	uint64_t bytes_received;
+	uint64_t bytes_sent;
+	uint64_t retained;
 	uint64_t memory;
 	float    cpu_percent;
 } client_stats;
@@ -1630,6 +1633,15 @@ compose_metrics(char *ret, client_stats *ms, client_stats *s)
 	             "\n# TYPE nanomq_messages_dropped counter"
 	             "\n# HELP nanomq_messages_dropped"
 	             "\nnanomq_messages_dropped %" PRIu64
+	             "\n# TYPE nanomq_bytes_received counter"
+	             "\n# HELP nanomq_bytes_received publish payload bytes received"
+	             "\nnanomq_bytes_received %" PRIu64
+	             "\n# TYPE nanomq_bytes_sent counter"
+	             "\n# HELP nanomq_bytes_sent publish payload bytes delivered"
+	             "\nnanomq_bytes_sent %" PRIu64
+	             "\n# TYPE nanomq_retained_messages_count gauge"
+	             "\n# HELP nanomq_retained_messages_count"
+	             "\nnanomq_retained_messages_count %" PRIu64
 	             "\n# TYPE nanomq_memory_usage gauge"
 	             "\n# HELP nanomq_memory_usage (b)"
 	             "\nnanomq_memory_usage %" PRIu64
@@ -1646,7 +1658,8 @@ compose_metrics(char *ret, client_stats *ms, client_stats *s)
 	snprintf(ret, METRICS_DATA_SIZE, fmt, s->connections, ms->connections,
 	    s->sessions, ms->sessions, s->topics, ms->topics, s->subscribers,
 	    ms->subscribers, s->message_received, s->message_sent,
-	    s->message_dropped, s->memory, ms->memory, s->cpu_percent,
+	    s->message_dropped, s->bytes_received, s->bytes_sent, s->retained,
+	    s->memory, ms->memory, s->cpu_percent,
 	    ms->cpu_percent);
 }
 
@@ -1794,7 +1807,10 @@ get_prometheus(http_msg *msg, kv **params, size_t param_num,
 	stats.message_received = nanomq_get_message_in();
 	stats.message_sent     = nanomq_get_message_out();
 	stats.message_dropped  = nanomq_get_message_drop();
+	stats.bytes_received   = nanomq_get_bytes_in();
+	stats.bytes_sent       = nanomq_get_bytes_out();
 #endif
+	stats.retained         = dbtree_retain_count(get_broker_retain_db());
 
 #if NANO_PLATFORM_LINUX
 	update_process_info(&stats);
