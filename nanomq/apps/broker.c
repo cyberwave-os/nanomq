@@ -51,6 +51,7 @@
 #include "include/rest_api.h"
 #include "include/webhook_post.h"
 #include "include/webhook_inproc.h"
+#include "include/sys_stats.h"
 #include "include/cmd_proc.h"
 #include "include/process.h"
 #include "include/version.h"
@@ -1374,6 +1375,9 @@ broker(conf *nanomq_conf)
 		} else {
 			log_error("Start rest server failed!");
 		}
+	}
+	if (nanomq_conf->sys_topic.enable) {
+		nmq_sys_stats_start(nanomq_conf, &sock);
 	}
 	// Init ACL Cache hash map
 	conf_auth_http *auth_http = &nanomq_conf->auth_http;

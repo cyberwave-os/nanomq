@@ -29,6 +29,7 @@
 #include "include/bridge.h"
 #include "include/pub_handler.h"
 #include "include/sub_handler.h"
+#include "include/sys_stats.h"
 #include "include/acl_handler.h"
 #include "nng/protocol/mqtt/mqtt_parser.h"
 #include "nng/supplemental/util/platform.h"
@@ -1635,6 +1636,13 @@ handle_pub(nano_work *work, struct pipe_content *pipe_ct, uint8_t proto,
 	}
 	nng_atomic_inc64(g_msg.msg_in);
 #endif
+	// Publishes injected by the $SYS statistics thread carry a reserved
+	// client id and arrive only on the internal HTTP-server path, which
+	// network clients cannot use; they skip client auth/ACL like events.
+	const char *sys_cid = work->cparam == NULL ? NULL :
+	    (const char *) conn_param_get_clientid(work->cparam);
+	bool internal_sys = work->proto == PROTO_HTTP_SERVER &&
+	    sys_cid != NULL && strcmp(sys_cid, NMQ_SYS_CLIENTID) == 0;
 	// do not decode twice for bridge ctx!
 	if (work->proto != PROTO_MQTT_BRIDGE || is_event) {
 		work->pub_packet = (struct pub_packet_struct *) nng_zalloc(
@@ -1653,7 +1661,7 @@ handle_pub(nano_work *work, struct pipe_content *pipe_ct, uint8_t proto,
 #ifdef STATISTICS
 	// Internal $SYS events (client online/offline) run through this handler
 	// too; only count payloads published by clients.
-	if (!is_event) {
+	if (!is_event && !internal_sys) {
 		nng_atomic_add64(g_msg.bytes_in, work->pub_packet->payload.len);
 	}
 #endif
@@ -1663,7 +1671,7 @@ handle_pub(nano_work *work, struct pipe_content *pipe_ct, uint8_t proto,
 #ifdef ACL_SUPP
 	bool local_auth = work->config != NULL &&
 	    verify_local_credentials(work->cparam, work->config) == 1;
-	if (!is_event && work->config != NULL &&
+	if (!is_event && !internal_sys && work->config != NULL &&
 	    work->config->auth_http.enable && !local_auth) {
 		struct topic_queue *tq = topic_queue_init(topic, len);
 		if (tq == NULL) {
@@ -1740,7 +1748,7 @@ handle_pub(nano_work *work, struct pipe_content *pipe_ct, uint8_t proto,
 	topic = work->pub_packet->var_header.publish.topic_name.body;
 
 #ifdef ACL_SUPP
-	if (!is_event && work->cparam) {
+	if (!is_event && !internal_sys && work->cparam) {
 		if (work->config->acl.enable &&
 		    (!work->config->auth_http.enable || local_auth)) {
 			bool rv = auth_acl(

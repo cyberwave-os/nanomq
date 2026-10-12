@@ -41,6 +41,7 @@ set(SOURCES
     unsub_handler.c
     hashmap.c
     rest_api.c
+    sys_stats.c
     web_server.c
     webhook_inproc.c
     webhook_post.c

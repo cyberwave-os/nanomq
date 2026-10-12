@@ -28,6 +28,7 @@
 #include "include/sub_handler.h"
 #include "include/version.h"
 #include "include/mqtt_api.h"
+#include "include/sys_stats.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -1379,6 +1380,7 @@ typedef struct {
 	uint64_t bytes_received;
 	uint64_t bytes_sent;
 	uint64_t retained;
+	uint64_t subscriptions;
 	uint64_t memory;
 	float    cpu_percent;
 } client_stats;
@@ -1642,6 +1644,9 @@ compose_metrics(char *ret, client_stats *ms, client_stats *s)
 	             "\n# TYPE nanomq_retained_messages_count gauge"
 	             "\n# HELP nanomq_retained_messages_count"
 	             "\nnanomq_retained_messages_count %" PRIu64
+	             "\n# TYPE nanomq_subscriptions_count gauge"
+	             "\n# HELP nanomq_subscriptions_count topic filter subscriptions"
+	             "\nnanomq_subscriptions_count %" PRIu64
 	             "\n# TYPE nanomq_memory_usage gauge"
 	             "\n# HELP nanomq_memory_usage (b)"
 	             "\nnanomq_memory_usage %" PRIu64
@@ -1658,7 +1663,7 @@ compose_metrics(char *ret, client_stats *ms, client_stats *s)
 	snprintf(ret, METRICS_DATA_SIZE, fmt, s->connections, ms->connections,
 	    s->sessions, ms->sessions, s->topics, ms->topics, s->subscribers,
 	    ms->subscribers, s->message_received, s->message_sent,
-	    s->message_dropped, s->bytes_received, s->bytes_sent, s->retained,
+	    s->message_dropped, s->bytes_received, s->bytes_sent, s->retained, s->subscriptions,
 	    s->memory, ms->memory, s->cpu_percent,
 	    ms->cpu_percent);
 }
@@ -1803,14 +1808,19 @@ get_prometheus(http_msg *msg, kv **params, size_t param_num,
 	nng_id_map_foreach2(pipe_id_map, get_metric_cb, &stats);
 	stats.subscribers      = dbhash_get_pipe_cnt();
 	stats.topics           = get_topics_count();
-#ifdef STATISTICS
-	stats.message_received = nanomq_get_message_in();
-	stats.message_sent     = nanomq_get_message_out();
-	stats.message_dropped  = nanomq_get_message_drop();
-	stats.bytes_received   = nanomq_get_bytes_in();
-	stats.bytes_sent       = nanomq_get_bytes_out();
-#endif
-	stats.retained         = dbtree_retain_count(get_broker_retain_db());
+	{
+		// Counters come from the shared snapshot, the same one the $SYS
+		// publisher formats from.
+		nmq_stats snap;
+		nmq_stats_snapshot(&snap, NULL);
+		stats.message_received = snap.msgs_in;
+		stats.message_sent     = snap.msgs_out;
+		stats.message_dropped  = snap.msgs_dropped;
+		stats.bytes_received   = snap.bytes_in;
+		stats.bytes_sent       = snap.bytes_out;
+		stats.retained         = snap.retained;
+		stats.subscriptions    = snap.subscriptions;
+	}
 
 #if NANO_PLATFORM_LINUX
 	update_process_info(&stats);
