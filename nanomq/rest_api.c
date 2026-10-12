@@ -1377,6 +1377,7 @@ typedef struct {
 	uint64_t message_received;
 	uint64_t message_sent;
 	uint64_t message_dropped;
+	uint64_t message_unrouted;
 	uint64_t bytes_received;
 	uint64_t bytes_sent;
 	uint64_t retained;
@@ -1612,8 +1613,11 @@ compose_metrics(char *ret, client_stats *ms, client_stats *s)
 	             "\n# HELP nanomq_messages_sent"
 	             "\nnanomq_messages_sent %" PRIu64
 	             "\n# TYPE nanomq_messages_dropped counter"
-	             "\n# HELP nanomq_messages_dropped"
+	             "\n# HELP nanomq_messages_dropped accepted but lost before delivery"
 	             "\nnanomq_messages_dropped %" PRIu64
+	             "\n# TYPE nanomq_messages_unrouted counter"
+	             "\n# HELP nanomq_messages_unrouted publishes with no subscriber"
+	             "\nnanomq_messages_unrouted %" PRIu64
 	             "\n# TYPE nanomq_bytes_received counter"
 	             "\n# HELP nanomq_bytes_received publish payload bytes received"
 	             "\nnanomq_bytes_received %" PRIu64
@@ -1642,7 +1646,7 @@ compose_metrics(char *ret, client_stats *ms, client_stats *s)
 	snprintf(ret, METRICS_DATA_SIZE, fmt, s->connections, ms->connections,
 	    s->sessions, ms->sessions, s->topics, ms->topics, s->subscribers,
 	    ms->subscribers, s->message_received, s->message_sent,
-	    s->message_dropped, s->bytes_received, s->bytes_sent, s->retained, s->subscriptions,
+	    s->message_dropped, s->message_unrouted, s->bytes_received, s->bytes_sent, s->retained, s->subscriptions,
 	    s->memory, ms->memory, s->cpu_percent,
 	    ms->cpu_percent);
 }
@@ -1788,6 +1792,7 @@ get_prometheus(http_msg *msg, kv **params, size_t param_num,
 	stats.message_received = snap.msgs_in;
 	stats.message_sent     = snap.msgs_out;
 	stats.message_dropped  = snap.msgs_dropped;
+	stats.message_unrouted = snap.msgs_unrouted;
 	stats.bytes_received   = snap.bytes_in;
 	stats.bytes_sent       = snap.bytes_out;
 	stats.retained         = snap.retained;

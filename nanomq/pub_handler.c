@@ -48,7 +48,7 @@ typedef struct {
 	bool            initialed;
 	nng_atomic_u64 *msg_in;
 	nng_atomic_u64 *msg_out;
-	nng_atomic_u64 *msg_drop;
+	nng_atomic_u64 *msg_unrouted; // publishes that matched no subscriber
 	// Publish payload bytes received from publishers / delivered to
 	// subscribers (one count per delivery, like msg_out).
 	nng_atomic_u64 *bytes_in;
@@ -62,7 +62,7 @@ msg_statistics_init(msg_statistics *m)
 {
 	nng_atomic_alloc64(&m->msg_in);
 	nng_atomic_alloc64(&m->msg_out);
-	nng_atomic_alloc64(&m->msg_drop);
+	nng_atomic_alloc64(&m->msg_unrouted);
 	nng_atomic_alloc64(&m->bytes_in);
 	nng_atomic_alloc64(&m->bytes_out);
 	m->initialed = true;
@@ -81,9 +81,9 @@ nanomq_get_message_out()
 }
 
 uint64_t
-nanomq_get_message_drop()
+nanomq_get_message_unrouted()
 {
-	return g_msg.initialed ? nng_atomic_get64(g_msg.msg_drop) : 0;
+	return g_msg.initialed ? nng_atomic_get64(g_msg.msg_unrouted) : 0;
 }
 
 uint64_t
@@ -1634,7 +1634,6 @@ handle_pub(nano_work *work, struct pipe_content *pipe_ct, uint8_t proto,
 	if (!g_msg.initialed) {
 		msg_statistics_init(&g_msg);
 	}
-	nng_atomic_inc64(g_msg.msg_in);
 #endif
 	// Publishes injected by the $SYS statistics thread carry a reserved
 	// client id and arrive only on the internal HTTP-server path, which
@@ -1648,6 +1647,11 @@ handle_pub(nano_work *work, struct pipe_content *pipe_ct, uint8_t proto,
 	}
 	// Broker-originated publishes: no client auth, ACL or byte accounting.
 	const bool trusted = is_event || internal_sys;
+#ifdef STATISTICS
+	if (!trusted) {
+		nng_atomic_inc64(g_msg.msg_in);
+	}
+#endif
 	// do not decode twice for bridge ctx!
 	if (work->proto != PROTO_MQTT_BRIDGE || is_event) {
 		work->pub_packet = (struct pub_packet_struct *) nng_zalloc(
@@ -1780,8 +1784,10 @@ handle_pub(nano_work *work, struct pipe_content *pipe_ct, uint8_t proto,
 	shared_cli_list = dbtree_find_shared_clients(work->db, topic);
 
 #ifdef STATISTICS
-	if (cli_ctx_list == NULL && shared_cli_list == NULL) {
-		nng_atomic_inc64(g_msg.msg_drop);
+	// Unrouted, not lost: nobody subscribed. The broker's own publishes
+	// ($SYS, client events) have no audience by design and are not counted.
+	if (!trusted && cli_ctx_list == NULL && shared_cli_list == NULL) {
+		nng_atomic_inc64(g_msg.msg_unrouted);
 	}
 #endif
 

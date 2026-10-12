@@ -13,9 +13,10 @@ typedef struct {
 	uint64_t sessions;      // pipes known to the broker (connected or not)
 	uint64_t subscriptions; // (topic filter, pipe) pairs
 	uint64_t retained;      // retained messages stored
-	uint64_t msgs_in;       // PUBLISH packets received, incl. internal events
+	uint64_t msgs_in;       // PUBLISH packets received from clients
 	uint64_t msgs_out;      // PUBLISH deliveries, one per subscriber
-	uint64_t msgs_dropped;  // publishes that matched no subscriber
+	uint64_t msgs_dropped;  // accepted but lost before delivery (queue overflow)
+	uint64_t msgs_unrouted; // publishes that matched no subscriber
 	uint64_t bytes_in;      // publish payload bytes received from clients
 	uint64_t bytes_out;     // publish payload bytes delivered
 	uint64_t heap_bytes;    // process resident memory

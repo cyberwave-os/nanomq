@@ -62,11 +62,12 @@ nmq_stats_snapshot(nmq_stats *s, nng_socket *broker_sock)
 		nng_id_map_foreach2(pipe_map, count_pipe_cb, s);
 	}
 	s->subscriptions = dbtree_subscription_count();
+	s->msgs_dropped  = nmq_msgs_lost();
 	s->retained      = dbtree_retain_count(get_broker_retain_db());
 #ifdef STATISTICS
 	s->msgs_in      = nanomq_get_message_in();
 	s->msgs_out     = nanomq_get_message_out();
-	s->msgs_dropped = nanomq_get_message_drop();
+	s->msgs_unrouted = nanomq_get_message_unrouted();
 	s->bytes_in     = nanomq_get_bytes_in();
 	s->bytes_out    = nanomq_get_bytes_out();
 #endif
@@ -205,6 +206,7 @@ sys_stats_thread(void *arg)
 		{ "publish/messages/received", offsetof(nmq_stats, msgs_in) },
 		{ "publish/messages/sent", offsetof(nmq_stats, msgs_out) },
 		{ "publish/messages/dropped", offsetof(nmq_stats, msgs_dropped) },
+		{ "publish/messages/unrouted", offsetof(nmq_stats, msgs_unrouted) },
 		{ "bytes/received", offsetof(nmq_stats, bytes_in) },
 		{ "bytes/sent", offsetof(nmq_stats, bytes_out) },
 		{ "publish/bytes/received", offsetof(nmq_stats, bytes_in) },
