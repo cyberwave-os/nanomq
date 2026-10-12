@@ -1,6 +1,8 @@
 // Stats snapshot and Mosquitto-compatible $SYS/broker/... publisher.
 #include <inttypes.h>
 #include <math.h>
+#include <stdarg.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -13,6 +15,7 @@
 #include "nng/mqtt/mqtt_client.h"
 #include "nng/protocol/mqtt/mqtt_parser.h"
 #include "nng/protocol/mqtt/nmq_mqtt.h"
+#include "nng/protocol/reqrep0/req.h"
 #include "nng/supplemental/nanolib/log.h"
 #include "nng/supplemental/nanolib/mqtt_db.h"
 #include "nng/supplemental/util/idhash.h"
@@ -90,7 +93,8 @@ static const struct {
 #define N_WINDOWS 3
 
 typedef struct {
-	const char *topic; // under $SYS/broker/load/
+	const char *topic;  // under $SYS/broker/load/
+	size_t      offset; // of the source counter in nmq_stats
 	uint64_t    prev;
 	double      ema[N_WINDOWS];
 	bool        primed;
@@ -113,6 +117,7 @@ send_sys(nng_socket req, const char *topic, const char *value)
 	nng_msg *msg = NULL;
 	if (encode_common_mqtt_msg(
 	        &msg, pub, NMQ_SYS_CLIENTID, MQTT_PROTOCOL_VERSION_v311) != 0) {
+		nng_msg_free(pub);
 		return -1;
 	}
 	if (nng_sendmsg(req, msg, 0) != 0) {
@@ -129,20 +134,15 @@ send_sys(nng_socket req, const char *topic, const char *value)
 }
 
 static void
-pub_u64(nng_socket req, const char *name, uint64_t v)
+pub_fmt(nng_socket req, const char *name, const char *fmt, ...)
 {
-	char topic[128], val[32];
+	char    topic[128], val[64];
+	va_list ap;
 	snprintf(topic, sizeof(topic), SYS_PREFIX "%s", name);
-	snprintf(val, sizeof(val), "%" PRIu64, v);
+	va_start(ap, fmt);
+	vsnprintf(val, sizeof(val), fmt, ap);
+	va_end(ap);
 	send_sys(req, topic, val);
-}
-
-static void
-pub_str(nng_socket req, const char *name, const char *v)
-{
-	char topic[128];
-	snprintf(topic, sizeof(topic), SYS_PREFIX "%s", name);
-	send_sys(req, topic, v);
 }
 
 static void
@@ -158,11 +158,10 @@ update_and_pub_load(nng_socket req, load_metric *m, uint64_t now, double dt_s)
 			double a  = 1.0 - exp(-dt_s / load_windows[i].window_s);
 			m->ema[i] = m->ema[i] + a * (rate_per_min - m->ema[i]);
 		}
-		char name[96], val[32];
+		char name[96];
 		snprintf(name, sizeof(name), "load/%s/%s", m->topic,
 		    load_windows[i].suffix);
-		snprintf(val, sizeof(val), "%.2f", m->ema[i]);
-		pub_str(req, name, val);
+		pub_fmt(req, name, "%.2f", m->ema[i]);
 	}
 	m->primed = true;
 }
@@ -186,13 +185,36 @@ sys_stats_thread(void *arg)
 	    NANO_VER_ID_SHORT);
 
 	load_metric loads[] = {
-		{ .topic = "messages/received" }, { .topic = "messages/sent" },
-		{ .topic = "publish/received" }, { .topic = "publish/sent" },
-		{ .topic = "publish/dropped" },  { .topic = "bytes/received" },
-		{ .topic = "bytes/sent" },
+		{ .topic = "messages/received", .offset = offsetof(nmq_stats, msgs_in) },
+		{ .topic = "messages/sent", .offset = offsetof(nmq_stats, msgs_out) },
+		{ .topic = "publish/received", .offset = offsetof(nmq_stats, msgs_in) },
+		{ .topic = "publish/sent", .offset = offsetof(nmq_stats, msgs_out) },
+		{ .topic = "publish/dropped", .offset = offsetof(nmq_stats, msgs_dropped) },
+		{ .topic = "bytes/received", .offset = offsetof(nmq_stats, bytes_in) },
+		{ .topic = "bytes/sent", .offset = offsetof(nmq_stats, bytes_out) },
 	};
-	uint64_t  max_clients = 0, max_heap = 0;
-	nng_time  last        = nng_clock();
+	// Plain gauges and counters; aliases are separate rows over one field.
+	static const struct {
+		const char *topic;
+		size_t      offset;
+	} plain[] = {
+		{ "clients/connected", offsetof(nmq_stats, connections) },
+		{ "clients/total", offsetof(nmq_stats, sessions) },
+		{ "messages/received", offsetof(nmq_stats, msgs_in) },
+		{ "messages/sent", offsetof(nmq_stats, msgs_out) },
+		{ "publish/messages/received", offsetof(nmq_stats, msgs_in) },
+		{ "publish/messages/sent", offsetof(nmq_stats, msgs_out) },
+		{ "publish/messages/dropped", offsetof(nmq_stats, msgs_dropped) },
+		{ "bytes/received", offsetof(nmq_stats, bytes_in) },
+		{ "bytes/sent", offsetof(nmq_stats, bytes_out) },
+		{ "publish/bytes/received", offsetof(nmq_stats, bytes_in) },
+		{ "publish/bytes/sent", offsetof(nmq_stats, bytes_out) },
+		{ "subscriptions/count", offsetof(nmq_stats, subscriptions) },
+		{ "retained messages/count", offsetof(nmq_stats, retained) },
+		{ "heap/current", offsetof(nmq_stats, heap_bytes) },
+	};
+	uint64_t max_clients = 0, max_heap = 0;
+	nng_time last        = nng_clock();
 
 	for (;;) {
 		nng_msleep((nng_duration) ctx->interval_s * 1000);
@@ -201,38 +223,20 @@ sys_stats_thread(void *arg)
 		nng_time now  = nng_clock();
 		double   dt_s = (double) (now - last) / 1000.0;
 		last          = now;
-		if (s.connections > max_clients) {
-			max_clients = s.connections;
-		}
-		if (s.heap_bytes > max_heap) {
-			max_heap = s.heap_bytes;
-		}
+		max_clients   = s.connections > max_clients ? s.connections : max_clients;
+		max_heap      = s.heap_bytes > max_heap ? s.heap_bytes : max_heap;
 
-		pub_str(req, "version", version);
-		char up[48];
-		snprintf(up, sizeof(up), "%" PRIu64 " seconds", s.uptime_s);
-		pub_str(req, "uptime", up);
-		pub_u64(req, "clients/connected", s.connections);
-		pub_u64(req, "clients/total", s.sessions);
-		pub_u64(req, "clients/maximum", max_clients);
-		pub_u64(req, "messages/received", s.msgs_in);
-		pub_u64(req, "messages/sent", s.msgs_out);
-		pub_u64(req, "publish/messages/received", s.msgs_in);
-		pub_u64(req, "publish/messages/sent", s.msgs_out);
-		pub_u64(req, "publish/messages/dropped", s.msgs_dropped);
-		pub_u64(req, "bytes/received", s.bytes_in);
-		pub_u64(req, "bytes/sent", s.bytes_out);
-		pub_u64(req, "publish/bytes/received", s.bytes_in);
-		pub_u64(req, "publish/bytes/sent", s.bytes_out);
-		pub_u64(req, "subscriptions/count", s.subscriptions);
-		pub_u64(req, "retained messages/count", s.retained);
-		pub_u64(req, "heap/current", s.heap_bytes);
-		pub_u64(req, "heap/maximum", max_heap);
-
-		uint64_t cur[] = { s.msgs_in, s.msgs_out, s.msgs_in,
-			s.msgs_out, s.msgs_dropped, s.bytes_in, s.bytes_out };
+		pub_fmt(req, "version", "%s", version);
+		pub_fmt(req, "uptime", "%" PRIu64 " seconds", s.uptime_s);
+		pub_fmt(req, "clients/maximum", "%" PRIu64, max_clients);
+		pub_fmt(req, "heap/maximum", "%" PRIu64, max_heap);
+		for (size_t i = 0; i < sizeof(plain) / sizeof(plain[0]); i++) {
+			pub_fmt(req, plain[i].topic, "%" PRIu64,
+			    *(uint64_t *) ((char *) &s + plain[i].offset));
+		}
 		for (size_t i = 0; i < sizeof(loads) / sizeof(loads[0]); i++) {
-			update_and_pub_load(req, &loads[i], cur[i], dt_s);
+			update_and_pub_load(req, &loads[i],
+			    *(uint64_t *) ((char *) &s + loads[i].offset), dt_s);
 		}
 	}
 }
@@ -250,8 +254,7 @@ nmq_sys_stats_start(conf *config, nng_socket *broker_sock)
 	}
 	static sys_ctx ctx;
 	ctx.broker_sock = broker_sock;
-	ctx.interval_s  = config->sys_topic.interval > 0 ?
-	     config->sys_topic.interval : 10;
+	ctx.interval_s  = config->sys_topic.interval;
 	nng_thread *thr = NULL;
 	if (nng_thread_create(&thr, sys_stats_thread, &ctx) != 0) {
 		log_error("sys_topic: thread start failed");

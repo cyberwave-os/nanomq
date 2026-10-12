@@ -1474,27 +1474,6 @@ get_client_cb(void *key, void *value, void *json_obj)
 	conn_param_free(cp);
 }
 
-static void
-get_metric_cb(void *key, void *value, void *stats)
-{
-	client_stats *s = (client_stats *) stats;
-	s->sessions++;
-	uint32_t       pipe_id = *(uint32_t *) key;
-	nng_pipe       pipe    = { .id = pipe_id };
-	bool           status  = nng_pipe_status(pipe);
-
-	conn_param    *cp      = nng_pipe_cparam(pipe);
-	const char    *cid     = conn_param_get_clientid(cp);
-	if (!status) s->connections++;
-
-	conn_param_free(cp);
-
-	// #ifdef STATISTICS
-	// 		cJSON_AddNumberToObject(data_info_elem, "recv_msg",
-	// 		    ctxt->recv_cnt != NULL ?
-	// nng_atomic_get64(ctxt->recv_cnt) : 0); #endif
-}
-
 static http_msg
 get_clients(http_msg *msg, kv **params, size_t param_num,
     const char *client_id, const char *username, nng_socket *broker_sock)
@@ -1798,29 +1777,21 @@ get_prometheus(http_msg *msg, kv **params, size_t param_num,
 
 	client_stats stats = { 0 };
 	static client_stats max_stats = { 0 };
-	nng_id_map *pipe_id_map;
 
-	if (nng_socket_get_ptr(*broker_sock, NMQ_OPT_MQTT_PIPES,
-	        (void **) &pipe_id_map) != 0) {
-		goto out;
-	}
-
-	nng_id_map_foreach2(pipe_id_map, get_metric_cb, &stats);
+	// One snapshot feeds this output and the $SYS publisher.
+	nmq_stats snap;
+	nmq_stats_snapshot(&snap, broker_sock);
+	stats.connections      = snap.connections;
+	stats.sessions         = snap.sessions;
 	stats.subscribers      = dbhash_get_pipe_cnt();
 	stats.topics           = get_topics_count();
-	{
-		// Counters come from the shared snapshot, the same one the $SYS
-		// publisher formats from.
-		nmq_stats snap;
-		nmq_stats_snapshot(&snap, NULL);
-		stats.message_received = snap.msgs_in;
-		stats.message_sent     = snap.msgs_out;
-		stats.message_dropped  = snap.msgs_dropped;
-		stats.bytes_received   = snap.bytes_in;
-		stats.bytes_sent       = snap.bytes_out;
-		stats.retained         = snap.retained;
-		stats.subscriptions    = snap.subscriptions;
-	}
+	stats.message_received = snap.msgs_in;
+	stats.message_sent     = snap.msgs_out;
+	stats.message_dropped  = snap.msgs_dropped;
+	stats.bytes_received   = snap.bytes_in;
+	stats.bytes_sent       = snap.bytes_out;
+	stats.retained         = snap.retained;
+	stats.subscriptions    = snap.subscriptions;
 
 #if NANO_PLATFORM_LINUX
 	update_process_info(&stats);
@@ -1830,7 +1801,6 @@ get_prometheus(http_msg *msg, kv **params, size_t param_num,
 	update_max_stats(&max_stats, &stats);
 	compose_metrics(dest, &max_stats, &stats);
 
-out:
 	put_http_msg(&res, "text/plain", NULL, NULL, NULL, dest, strlen(dest));
 
 	return res;

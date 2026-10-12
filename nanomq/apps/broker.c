@@ -1376,9 +1376,7 @@ broker(conf *nanomq_conf)
 			log_error("Start rest server failed!");
 		}
 	}
-	if (nanomq_conf->sys_topic.enable) {
-		nmq_sys_stats_start(nanomq_conf, &sock);
-	}
+	nmq_sys_stats_start(nanomq_conf, &sock);
 	// Init ACL Cache hash map
 	conf_auth_http *auth_http = &nanomq_conf->auth_http;
 	nng_mtx_lock(auth_http->acl_cache_mtx);

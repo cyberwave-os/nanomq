@@ -1639,10 +1639,15 @@ handle_pub(nano_work *work, struct pipe_content *pipe_ct, uint8_t proto,
 	// Publishes injected by the $SYS statistics thread carry a reserved
 	// client id and arrive only on the internal HTTP-server path, which
 	// network clients cannot use; they skip client auth/ACL like events.
-	const char *sys_cid = work->cparam == NULL ? NULL :
-	    (const char *) conn_param_get_clientid(work->cparam);
-	bool internal_sys = work->proto == PROTO_HTTP_SERVER &&
-	    sys_cid != NULL && strcmp(sys_cid, NMQ_SYS_CLIENTID) == 0;
+	// The proto test comes first so ordinary client publishes pay one compare.
+	bool internal_sys = false;
+	if (work->proto == PROTO_HTTP_SERVER && work->cparam != NULL) {
+		const char *cid =
+		    (const char *) conn_param_get_clientid(work->cparam);
+		internal_sys = cid != NULL && strcmp(cid, NMQ_SYS_CLIENTID) == 0;
+	}
+	// Broker-originated publishes: no client auth, ACL or byte accounting.
+	const bool trusted = is_event || internal_sys;
 	// do not decode twice for bridge ctx!
 	if (work->proto != PROTO_MQTT_BRIDGE || is_event) {
 		work->pub_packet = (struct pub_packet_struct *) nng_zalloc(
@@ -1661,7 +1666,7 @@ handle_pub(nano_work *work, struct pipe_content *pipe_ct, uint8_t proto,
 #ifdef STATISTICS
 	// Internal $SYS events (client online/offline) run through this handler
 	// too; only count payloads published by clients.
-	if (!is_event && !internal_sys) {
+	if (!trusted) {
 		nng_atomic_add64(g_msg.bytes_in, work->pub_packet->payload.len);
 	}
 #endif
@@ -1671,7 +1676,7 @@ handle_pub(nano_work *work, struct pipe_content *pipe_ct, uint8_t proto,
 #ifdef ACL_SUPP
 	bool local_auth = work->config != NULL &&
 	    verify_local_credentials(work->cparam, work->config) == 1;
-	if (!is_event && !internal_sys && work->config != NULL &&
+	if (!trusted && work->config != NULL &&
 	    work->config->auth_http.enable && !local_auth) {
 		struct topic_queue *tq = topic_queue_init(topic, len);
 		if (tq == NULL) {
@@ -1748,7 +1753,7 @@ handle_pub(nano_work *work, struct pipe_content *pipe_ct, uint8_t proto,
 	topic = work->pub_packet->var_header.publish.topic_name.body;
 
 #ifdef ACL_SUPP
-	if (!is_event && !internal_sys && work->cparam) {
+	if (!trusted && work->cparam) {
 		if (work->config->acl.enable &&
 		    (!work->config->auth_http.enable || local_auth)) {
 			bool rv = auth_acl(
